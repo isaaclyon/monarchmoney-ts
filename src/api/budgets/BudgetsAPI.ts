@@ -430,53 +430,56 @@ export class BudgetsAPIImpl implements BudgetsAPI {
       validateDate(startDate)
     }
 
+    // Use current month if no start date provided
+    const now = new Date()
+    const defaultStartDate = startDate || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+
     const mutation = `
-      mutation UpdateBudgetItem(
-        $amount: Float!
-        $categoryId: String
-        $categoryGroupId: String
-        $timeframe: String!
-        $startDate: String
-        $applyToFuture: Boolean!
-      ) {
-        updateBudgetItem(
-          amount: $amount
-          categoryId: $categoryId
-          categoryGroupId: $categoryGroupId
-          timeframe: $timeframe
-          startDate: $startDate
-          applyToFuture: $applyToFuture
-        ) {
+      mutation Common_UpdateBudgetItem($input: UpdateOrCreateBudgetItemMutationInput!) {
+        updateOrCreateBudgetItem(input: $input) {
           budgetItem {
             id
-            amount
-            categoryId
-            categoryGroupId
-            timeframe
-            startDate
-            endDate
+            budgetAmount
           }
           errors {
-            field
-            messages
+            ...PayloadErrorFields
           }
         }
       }
+      fragment PayloadErrorFields on PayloadError {
+        fieldErrors {
+          field
+          messages
+        }
+        message
+        code
+      }
     `
 
+    const input = {
+      startDate: defaultStartDate,
+      timeframe,
+      amount,
+      applyToFuture,
+      ...(categoryId && { categoryId }),
+      ...(categoryGroupId && { categoryGroupId }),
+    }
+
     const result = await this.graphql.mutation<{
-      updateBudgetItem: {
+      updateOrCreateBudgetItem: {
         budgetItem: BudgetItem
         errors: any[]
       }
-    }>(mutation, { amount, categoryId, categoryGroupId, timeframe, startDate, applyToFuture })
+    }>(mutation, { input })
 
-    if (result.updateBudgetItem.errors?.length > 0) {
-      throw new Error(`Budget update failed: ${result.updateBudgetItem.errors[0].messages.join(', ')}`)
+    if (result.updateOrCreateBudgetItem.errors?.length > 0) {
+      const errors = result.updateOrCreateBudgetItem.errors[0]
+      const errorMsg = errors.message || errors.fieldErrors?.map((e: any) => e.messages.join(', ')).join('; ') || 'Unknown error'
+      throw new Error(`Budget update failed: ${errorMsg}`)
     }
 
     logger.info('Budget amount updated successfully')
-    return result.updateBudgetItem.budgetItem
+    return result.updateOrCreateBudgetItem.budgetItem
   }
 
   async getGoals(): Promise<Goal[]> {
