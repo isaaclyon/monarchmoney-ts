@@ -135,49 +135,82 @@ export class CategoriesAPIImpl implements CategoriesAPI {
   }
 
   async createCategory(data: CreateCategoryInput): Promise<TransactionCategory> {
-    validateRequired({ name: data.name })
+    validateRequired({ name: data.name, groupId: data.groupId })
     logger.debug(`Creating transaction category: ${data.name}`)
 
+    // Use the EXACT Monarch Money GraphQL mutation format with fragments
     const mutation = `
-      mutation CreateTransactionCategory($input: CreateTransactionCategoryInput!) {
-        createTransactionCategory(input: $input) {
+      mutation Web_CreateCategory($input: CreateCategoryInput!) {
+        createCategory(input: $input) {
+          errors {
+            ...PayloadErrorFields
+            __typename
+          }
           category {
             id
-            name
-            displayName
-            shortName
-            color
-            icon
-            order
-            isDefault
-            isDisabled
-            isSystemCategory
-            groupId
-            parentCategoryId
-            createdAt
-            updatedAt
+            ...CategoryFormFields
+            __typename
           }
-          errors {
-            field
-            message
-          }
+          __typename
         }
+      }
+      fragment PayloadErrorFields on PayloadError {
+        fieldErrors {
+          field
+          messages
+          __typename
+        }
+        message
+        code
+        __typename
+      }
+      fragment CategoryFormFields on Category {
+        id
+        order
+        name
+        systemCategory
+        systemCategoryDisplayName
+        budgetVariability
+        isSystemCategory
+        isDisabled
+        group {
+          id
+          type
+          groupLevelBudgetingEnabled
+          __typename
+        }
+        rolloverPeriod {
+          id
+          startMonth
+          startingBalance
+          __typename
+        }
+        __typename
       }
     `
 
-    const result = await this.graphql.mutation<{
-      createTransactionCategory: {
-        category: TransactionCategory
-        errors: Array<{ field: string; message: string }>
-      }
-    }>(mutation, { input: data })
-
-    if (result.createTransactionCategory.errors?.length > 0) {
-      const errorMessages = result.createTransactionCategory.errors.map(e => e.message).join(', ')
-      throw new Error(`Failed to create category: ${errorMessages}`)
+    // Build input matching Monarch's expected format
+    const input = {
+      group: data.groupId,
+      name: data.name,
+      icon: data.icon || '\u2753', // Default to question mark emoji
+      rolloverEnabled: false,
+      rolloverType: 'monthly',
+      rolloverStartMonth: new Date().toISOString().slice(0, 7) + '-01', // First of current month YYYY-MM-01
     }
 
-    return result.createTransactionCategory.category
+    const result = await this.graphql.mutation<{
+      createCategory: {
+        category: TransactionCategory
+        errors: { message: string; code: string } | null
+      }
+    }>(mutation, { input })
+
+    if (result.createCategory.errors) {
+      throw new Error(`Failed to create category: ${result.createCategory.errors.message}`)
+    }
+
+    return result.createCategory.category
   }
 
   async updateCategory(categoryId: string, data: UpdateCategoryInput): Promise<TransactionCategory> {
@@ -226,35 +259,46 @@ export class CategoriesAPIImpl implements CategoriesAPI {
     return result.updateTransactionCategory.category
   }
 
-  async deleteCategory(categoryId: string): Promise<boolean> {
+  async deleteCategory(categoryId: string, moveToCategoryId?: string): Promise<boolean> {
     validateRequired({ categoryId })
     logger.debug(`Deleting category: ${categoryId}`)
 
+    // Use the EXACT Monarch Money GraphQL mutation format with fragments
     const mutation = `
-      mutation DeleteTransactionCategory($categoryId: ID!) {
-        deleteTransactionCategory(id: $categoryId) {
-          success
+      mutation Web_DeleteCategory($id: UUID!, $moveToCategoryId: UUID) {
+        deleteCategory(id: $id, moveToCategoryId: $moveToCategoryId) {
           errors {
-            field
-            message
+            ...PayloadErrorFields
+            __typename
           }
+          deleted
+          __typename
         }
+      }
+      fragment PayloadErrorFields on PayloadError {
+        fieldErrors {
+          field
+          messages
+          __typename
+        }
+        message
+        code
+        __typename
       }
     `
 
     const result = await this.graphql.mutation<{
-      deleteTransactionCategory: {
-        success: boolean
-        errors: Array<{ field: string; message: string }>
+      deleteCategory: {
+        deleted: boolean
+        errors: { message: string; code: string } | null
       }
-    }>(mutation, { categoryId })
+    }>(mutation, { id: categoryId, moveToCategoryId })
 
-    if (result.deleteTransactionCategory.errors?.length > 0) {
-      const errorMessages = result.deleteTransactionCategory.errors.map(e => e.message).join(', ')
-      throw new Error(`Failed to delete category: ${errorMessages}`)
+    if (result.deleteCategory.errors) {
+      throw new Error(`Failed to delete category: ${result.deleteCategory.errors.message}`)
     }
 
-    return result.deleteTransactionCategory.success
+    return result.deleteCategory.deleted
   }
 
   async deleteCategories(categoryIds: string[]): Promise<BulkDeleteResult> {
@@ -284,35 +328,27 @@ export class CategoriesAPIImpl implements CategoriesAPI {
   // Category groups methods
   async getCategoryGroups(): Promise<CategoryGroup[]> {
     logger.debug('Fetching all category groups')
-    
+
+    // Use the exact query from the Python library
     const query = `
-      query GetTransactionCategoryGroups {
-        transactionCategoryGroups {
+      query ManageGetCategoryGroups {
+        categoryGroups {
           id
           name
-          displayName
-          color
-          icon
           order
-          isDefault
-          categories {
-            id
-            name
-            displayName
-            color
-            icon
-          }
-          createdAt
+          type
           updatedAt
+          createdAt
+          __typename
         }
       }
     `
 
     const result = await this.graphql.query<{
-      transactionCategoryGroups: CategoryGroup[]
+      categoryGroups: CategoryGroup[]
     }>(query)
 
-    return result.transactionCategoryGroups || []
+    return result.categoryGroups || []
   }
 
   async getCategoryGroupById(groupId: string): Promise<CategoryGroup> {
